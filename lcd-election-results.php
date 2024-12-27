@@ -34,17 +34,14 @@ class LCD_Election_Results {
 
     public static function activate() {
         global $wpdb;
+        
         self::$results_table = $wpdb->prefix . 'election_results';
         self::$candidates_table = $wpdb->prefix . 'election_candidates';
         
         $charset_collate = $wpdb->get_charset_collate();
         
-        // Drop existing tables to ensure clean schema
-        $wpdb->query("DROP TABLE IF EXISTS " . self::$results_table);
-        $wpdb->query("DROP TABLE IF EXISTS " . self::$candidates_table);
-        
-        // Create candidates table
-        $sql_candidates = "CREATE TABLE " . self::$candidates_table . " (
+        // Create candidates table if it doesn't exist
+        $sql_candidates = "CREATE TABLE IF NOT EXISTS " . self::$candidates_table . " (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
             candidate_name VARCHAR(255) NOT NULL,
             race_name VARCHAR(255) NOT NULL,
@@ -55,8 +52,8 @@ class LCD_Election_Results {
             UNIQUE KEY unique_candidate_race (candidate_name(80), race_name(80), election_date)
         ) $charset_collate;";
 
-        // Create results table with candidate_id
-        $sql_results = "CREATE TABLE " . self::$results_table . " (
+        // Create results table with candidate_id if it doesn't exist
+        $sql_results = "CREATE TABLE IF NOT EXISTS " . self::$results_table . " (
             id BIGINT AUTO_INCREMENT PRIMARY KEY,
             election_date DATE NOT NULL,
             candidate_id BIGINT NOT NULL,

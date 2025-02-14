@@ -1367,7 +1367,9 @@ class LCD_Election_Results {
         $import_status = array(
             'success' => false,
             'message' => '',
-            'count' => 0
+            'count' => 0,
+            'skipped' => 0,
+            'errors' => array()
         );
         
         // Basic error checking
@@ -1401,48 +1403,83 @@ class LCD_Election_Results {
                 throw new Exception('Could not read header row');
             }
 
+            // Get all existing voter IDs for validation
+            $existing_voters = $wpdb->get_col("SELECT state_voter_id FROM " . self::$voters_table);
+            if (!$existing_voters) {
+                throw new Exception('No registered voters found in the database. Please import voter registration data first.');
+            }
+            $existing_voters = array_flip($existing_voters); // Convert to hash map for faster lookup
+
             // Insert new data
             $insert_count = 0;
+            $skipped_count = 0;
             $line = 2; // Start at line 2 since we skipped header
             $errors = array();
+            $batch_size = 1000;
+            $values = array();
+            $placeholders = array();
             
             while (($row = fgetcsv($handle, 0, '|')) !== false) {
-                if (count($row) < 5) { // Number of expected columns
+                if (count($row) < 5) {
                     $errors[] = "Line $line: Invalid data format. Expected 5 columns.";
+                    continue;
+                }
+
+                $voter_history_id = $row[0];
+                $state_voter_id = $row[3];
+                
+                // Skip if voter doesn't exist
+                if (!isset($existing_voters[$state_voter_id])) {
+                    $skipped_count++;
+                    continue;
+                }
+
+                // Check if history record already exists
+                $exists = $wpdb->get_var($wpdb->prepare(
+                    "SELECT 1 FROM " . self::$voter_history_table . " WHERE voter_history_id = %d LIMIT 1",
+                    $voter_history_id
+                ));
+
+                if ($exists) {
+                    $skipped_count++;
                     continue;
                 }
 
                 $election_date = date('Y-m-d', strtotime($row[4]));
 
-                $inserted = $wpdb->insert(
-                    self::$voter_history_table,
-                    array(
-                        'voter_history_id' => $row[0],
-                        'state_voter_id' => $row[3],
-                        'county_code' => $row[1],
-                        'county_code_voting' => $row[2],
-                        'election_date' => $election_date
-                    ),
-                    array('%d', '%d', '%s', '%s', '%s')
+                // Add to batch
+                array_push($values, 
+                    $voter_history_id,
+                    $state_voter_id,
+                    $row[1], // county_code
+                    $row[2], // county_code_voting
+                    $election_date
                 );
+                $placeholders[] = "(%d, %d, %s, %s, %s)";
 
-                if ($inserted === false) {
-                    // Check if it's a duplicate entry
-                    if (strpos($wpdb->last_error, 'Duplicate entry') !== false) {
-                        // Skip duplicates silently
-                        continue;
-                    }
-                    
-                    if ($wpdb->last_error) {
-                        $errors[] = "Line $line: " . $wpdb->last_error;
+                // Insert batch if we've reached batch size
+                if (count($placeholders) >= $batch_size) {
+                    $result = $this->insert_history_batch($placeholders, $values);
+                    if ($result === false) {
+                        $errors[] = "Error inserting batch near line $line: " . $wpdb->last_error;
                     } else {
-                        $errors[] = "Line $line: Failed to insert history data";
+                        $insert_count += $result;
                     }
-                } else {
-                    $insert_count++;
+                    $placeholders = array();
+                    $values = array();
                 }
 
                 $line++;
+            }
+
+            // Insert any remaining records
+            if (!empty($placeholders)) {
+                $result = $this->insert_history_batch($placeholders, $values);
+                if ($result === false) {
+                    $errors[] = "Error inserting final batch: " . $wpdb->last_error;
+                } else {
+                    $insert_count += $result;
+                }
             }
 
             fclose($handle);
@@ -1450,11 +1487,13 @@ class LCD_Election_Results {
             if (empty($errors)) {
                 $wpdb->query('COMMIT');
                 $import_status['success'] = true;
-                $import_status['message'] = "Successfully imported $insert_count voting history records.";
+                $import_status['message'] = "Successfully imported $insert_count voting history records. Skipped $skipped_count records.";
                 $import_status['count'] = $insert_count;
+                $import_status['skipped'] = $skipped_count;
             } else {
                 $wpdb->query('ROLLBACK');
                 $import_status['message'] = implode("\n", $errors);
+                $import_status['errors'] = $errors;
             }
 
             // Clean up
@@ -1466,9 +1505,23 @@ class LCD_Election_Results {
             }
             $wpdb->query('ROLLBACK');
             $import_status['message'] = $e->getMessage();
+            $import_status['errors'][] = $e->getMessage();
         }
 
         return $import_status;
+    }
+
+    private function insert_history_batch($placeholders, $values) {
+        global $wpdb;
+        
+        $sql = $wpdb->prepare(
+            "INSERT INTO " . self::$voter_history_table . "
+            (voter_history_id, state_voter_id, county_code, county_code_voting, election_date)
+            VALUES " . implode(', ', $placeholders),
+            $values
+        );
+
+        return $wpdb->query($sql);
     }
 }
 

@@ -370,6 +370,24 @@ class LCD_Election_Results {
 
         add_submenu_page(
             'lcd-election-results',
+            'Manage Candidates',
+            'Manage Candidates',
+            'manage_options',
+            'lcd-election-candidates',
+            array($this, 'render_candidates_page')
+        );
+
+        add_submenu_page(
+            'lcd-election-results',
+            'Party Colors',
+            'Party Colors',
+            'manage_options',
+            'lcd-party-colors',
+            array($this, 'render_party_colors_page')
+        );
+
+        add_submenu_page(
+            'lcd-election-results',
             'Manage Precincts',
             'Manage Precincts',
             'manage_options',
